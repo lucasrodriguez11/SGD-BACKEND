@@ -13,7 +13,7 @@ import {
 import { mongoIdSchema } from '@/http/validators';
 import { createErrorResponse, createAppError } from '@/http/middleware/errorHandler';
 import type { ApiResponse } from '@/types';
-import { requireAuth, requireRole } from '@/http/middleware/auth';
+import { requireAuth, requireRole, type AuthPayload } from '@/http/middleware/auth';
 
 const despachosRoutes = new Hono();
 
@@ -146,12 +146,18 @@ despachosRoutes.post('/', requireAuth, requireRole('ADMIN'), zValidator('json', 
 despachosRoutes.put(
     '/:id',
     requireAuth,
-    requireRole('ADMIN'),
     zValidator('param', mongoIdSchema),
     zValidator('json', updateDespachoSchema),
     async (c) => {
         try {
+            const auth = c.get('auth') as AuthPayload | undefined;
             const { id } = c.req.valid('param');
+
+            // Autorización: ADMIN o dueño del despacho
+            if (!auth || (auth.role !== 'ADMIN' && auth.desp !== id)) {
+                return c.json({ success: false, error: { message: 'Prohibido' } }, 403 as any);
+            }
+
             const data = c.req.valid('json');
             const despacho = await DespachoService.update(id, data);
 

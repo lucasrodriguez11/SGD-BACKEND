@@ -24,12 +24,16 @@ export class NotificationService {
         });
         logger.info({ id: saved._id, type: saved.type }, 'Notification created');
         eventBus.emit('notification', saved.toJSON());
+        // broadcast global and targeted channel (notifications:<orgTargetId>) when available
         wsHub.broadcast('notifications', saved.toJSON());
+        if (saved.orgTargetId) {
+            wsHub.broadcast(`notifications:${saved.orgTargetId}`, saved.toJSON());
+        }
         return saved;
     }
 
     static async markRead(id: string) {
-        const n = await NotificationModel.findByIdAndUpdate(id, { read: true }, { new: true });
+        const n = await NotificationModel.findByIdAndUpdate(id, { readAt: new Date() }, { new: true });
         return n;
     }
 }
