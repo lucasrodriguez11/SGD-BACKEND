@@ -55,6 +55,74 @@ usersRoutes.patch(
     }
 );
 
+// Admin: update arbitrary user fields (name/email/role/despachoId)
+usersRoutes.put(
+    '/:id',
+    requireAuth,
+    requireRole('ADMIN'),
+    zValidator(
+        'json',
+        z.object({
+            name: z.string().min(2).optional(),
+            email: z.string().email().optional(),
+            role: UserRoleEnum.optional(),
+            despachoId: z.string().regex(/^[0-9a-fA-F]{24}$/).nullable().optional(),
+        })
+    ),
+    async (c) => {
+        try {
+            const id = c.req.param('id');
+            const payload = c.req.valid('json');
+            const update: any = {};
+            if (payload.name) update.name = payload.name;
+            if (payload.email) update.email = payload.email.toLowerCase();
+            if (payload.role) update.role = payload.role;
+            if (payload.despachoId !== undefined) update.despachoId = payload.despachoId;
+            const user = await UserModel.findByIdAndUpdate(id, update, { new: true });
+            if (!user) return createErrorResponse(c, { message: 'Usuario no encontrado' }, 404);
+            const response: ApiResponse = { success: true, data: { user } };
+            return c.json(response, 200 as any);
+        } catch (error) {
+            return createErrorResponse(c, { message: error instanceof Error ? error.message : 'Error al actualizar usuario' }, 400);
+        }
+    }
+);
+
+// Admin: reset password (no current required)
+usersRoutes.post(
+    '/:id/password',
+    requireAuth,
+    requireRole('ADMIN'),
+    zValidator('json', z.object({ newPassword: z.string().min(6) })),
+    async (c) => {
+        try {
+            const id = c.req.param('id');
+            const { newPassword } = c.req.valid('json');
+            const user = await UserModel.findById(id);
+            if (!user) return createErrorResponse(c, { message: 'Usuario no encontrado' }, 404);
+            user.passwordHash = await AuthService.hashPassword(newPassword);
+            await user.save();
+            const response: ApiResponse = { success: true, data: { ok: true } };
+            return c.json(response, 200 as any);
+        } catch (error) {
+            return createErrorResponse(c, { message: error instanceof Error ? error.message : 'Error al cambiar contraseña' }, 400);
+        }
+    }
+);
+
+// Admin: delete user
+usersRoutes.delete('/:id', requireAuth, requireRole('ADMIN'), async (c) => {
+    try {
+        const id = c.req.param('id');
+        const deleted = await UserModel.findByIdAndDelete(id);
+        if (!deleted) return createErrorResponse(c, { message: 'Usuario no encontrado' }, 404);
+        const response: ApiResponse = { success: true, data: { ok: true } };
+        return c.json(response, 200 as any);
+    } catch (error) {
+        return createErrorResponse(c, { message: error instanceof Error ? error.message : 'Error al eliminar usuario' }, 400);
+    }
+});
+
 // Update current user profile
 usersRoutes.put('/me', requireAuth, zValidator('json', z.object({
     name: z.string().min(2).optional(),
