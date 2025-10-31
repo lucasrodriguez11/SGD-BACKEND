@@ -20,8 +20,8 @@ inboxRoutes.post('/messages', requireAuth, zValidator('json', z.object({ toDespa
     const auth = c.get('auth') as any;
     const { toDespachoId, text, fromDespachoId } = c.req.valid('json');
     const from = fromDespachoId ?? (auth?.desp as string | undefined);
-    if (!from) {
-        return c.json({ success: false, error: { message: 'fromDespachoId requerido' } } as ApiResponse, 400 as any);
+    if (!from || from === 'null') {
+        return c.json({ success: false, error: { message: 'No tenés un despacho asignado. Contactá a un administrador.' } } as ApiResponse, 400 as any);
     }
     const msg = await InboxService.send(from, toDespachoId, text);
     const response: ApiResponse = { success: true, data: { message: msg } };
@@ -31,7 +31,10 @@ inboxRoutes.post('/messages', requireAuth, zValidator('json', z.object({ toDespa
  // Threads summary for my despacho
  inboxRoutes.get('/threads', requireAuth, async (c) => {
      const auth = c.get('auth') as any;
-     const myDesp = auth.desp as string;
+     const myDesp = auth?.desp as string | null | undefined;
+     if (!myDesp || myDesp === 'null') {
+         return c.json({ success: false, error: { message: 'No tenés un despacho asignado' } } as ApiResponse, 400 as any);
+     }
      const threads = await InboxService.listThreads(myDesp);
      return c.json({ success: true, data: { threads } } as ApiResponse, 200 as any);
  });
@@ -39,7 +42,10 @@ inboxRoutes.post('/messages', requireAuth, zValidator('json', z.object({ toDespa
  // Conversation messages between my despacho and a peer
  inboxRoutes.get('/messages/conversation/:peerId', requireAuth, async (c) => {
      const auth = c.get('auth') as any;
-     const myDesp = auth.desp as string;
+     const myDesp = auth?.desp as string | null | undefined;
+     if (!myDesp || myDesp === 'null') {
+         return c.json({ success: false, error: { message: 'No tenés un despacho asignado' } } as ApiResponse, 400 as any);
+     }
      const peerId = c.req.param('peerId');
      const limit = Number(c.req.query('limit') ?? '100');
      const messages = await InboxService.listConversation(myDesp, peerId, limit);
@@ -49,7 +55,10 @@ inboxRoutes.post('/messages', requireAuth, zValidator('json', z.object({ toDespa
  // Mark thread as read
  inboxRoutes.post('/threads/:peerId/read', requireAuth, async (c) => {
      const auth = c.get('auth') as any;
-     const myDesp = auth.desp as string;
+     const myDesp = auth?.desp as string | null | undefined;
+     if (!myDesp || myDesp === 'null') {
+         return c.json({ success: false, error: { message: 'No tenés un despacho asignado' } } as ApiResponse, 400 as any);
+     }
      const peerId = c.req.param('peerId');
      await InboxService.markRead(myDesp, peerId);
      return c.json({ success: true, data: { ok: true } } as ApiResponse, 200 as any);

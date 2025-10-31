@@ -1,6 +1,7 @@
 import { createLogger } from '@/logger';
 import { model, Schema, Model } from 'mongoose';
 import { NotificationService } from './NotificationService';
+import { ExpedienteModel, MovimientoModel } from '@/database';
 
 export interface IRecepcion {
     _id?: string;
@@ -48,10 +49,38 @@ export class RecepcionService {
         if (recibidoEn) query.recibidoEn = recibidoEn;
         const skip = (page - 1) * limit;
         const [items, total] = await Promise.all([
-            RecepcionModel.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit),
+            RecepcionModel.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
             RecepcionModel.countDocuments(query),
         ]);
-        return { items, page, limit, total, totalPages: Math.ceil(total / limit) };
+
+        // Enriquecer datos con información del expediente y movimiento
+        const enriched = await Promise.all(
+            items.map(async (item: any) => {
+                const expedienteIdStr = typeof item.expedienteId === 'object' && item.expedienteId && '_id' in item.expedienteId
+                    ? (item.expedienteId as any)._id?.toString() ?? item.expedienteId.toString()
+                    : item.expedienteId.toString();
+
+                // Buscar el expediente para obtener número y despacho origen
+                const expediente = await ExpedienteModel.findById(expedienteIdStr).lean().exec();
+                // Buscar el movimiento más reciente para este expediente que tenga despachoNuevo = recibidoEn
+                const movimiento = await MovimientoModel.findOne({
+                    expedienteId: expedienteIdStr,
+                    despachoNuevo: item.recibidoEn,
+                }).sort({ fechaMovimiento: -1 }).lean().exec();
+
+                return {
+                    _id: item._id?.toString(),
+                    expedienteId: expediente?.numeroExpediente ?? expedienteIdStr,
+                    despachoOrigenId: movimiento?.despachoAnterior ?? (expediente?.despachoActual ? String(expediente.despachoActual) : 'Desconocido'),
+                    despachoDestinoId: String(item.recibidoEn),
+                    fechaEnvio: movimiento?.fechaMovimiento ?? item.createdAt,
+                    status: item.confirmado ? 'CONFIRMADO' : 'PENDIENTE',
+                    createdAt: item.createdAt,
+                };
+            })
+        );
+
+        return { items: enriched, page, limit, total, totalPages: Math.ceil(total / limit) };
     }
 
     static async confirmar(id: string, userId?: string | null) {
@@ -61,6 +90,25 @@ export class RecepcionService {
             { new: true }
         );
         if (!updated) throw new Error('Recepción no encontrada');
+
+        // Actualizar el movimiento y expediente a RECEPCIONADO
+        const movimiento = await MovimientoModel.findOne({
+            expedienteId: updated.expedienteId,
+            despachoNuevo: updated.recibidoEn,
+        }).sort({ fechaMovimiento: -1 }).exec();
+
+        if (movimiento && movimiento.estado === 'ENVIADO') {
+            movimiento.estado = 'RECEPCIONADO';
+            await movimiento.save();
+
+            // Actualizar el expediente también
+            const expediente = await ExpedienteModel.findById(updated.expedienteId).exec();
+            if (expediente && expediente.estado === 'ENVIADO') {
+                expediente.estado = 'RECEPCIONADO';
+                await expediente.save();
+            }
+        }
+
         await NotificationService.push({
             type: 'EXPEDIENTE_CONFIRMADO',
             message: 'Recepción confirmada',
