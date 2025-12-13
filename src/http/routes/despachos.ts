@@ -182,7 +182,7 @@ despachosRoutes.put(
 );
 
 /**
- * DELETE /despachos/:id - Deactivate despacho
+ * DELETE /despachos/:id - Deactivate despacho (soft delete)
  */
 despachosRoutes.delete('/:id', requireAuth, requireRole('ADMIN'), zValidator('param', mongoIdSchema), async (c) => {
     try {
@@ -203,6 +203,33 @@ despachosRoutes.delete('/:id', requireAuth, requireRole('ADMIN'), zValidator('pa
         return createErrorResponse(
             c,
             createAppError(error instanceof Error ? error.message : 'Error al desactivar despacho', 500),
+            500 as any
+        );
+    }
+});
+
+/**
+ * DELETE /despachos/:id/delete - Delete despacho permanently (hard delete)
+ */
+despachosRoutes.delete('/:id/delete', requireAuth, requireRole('ADMIN'), zValidator('param', mongoIdSchema), async (c) => {
+    try {
+        const { id } = c.req.valid('param');
+        const deleted = await DespachoService.deletePermanently(id);
+
+        if (!deleted) {
+            return createErrorResponse(c, createAppError('Despacho no encontrado', 404), 404 as any);
+        }
+
+        const response: ApiResponse = {
+            success: true,
+            data: { message: 'Despacho eliminado permanentemente' },
+        };
+
+        return c.json(response, 200 as any);
+    } catch (error) {
+        return createErrorResponse(
+            c,
+            createAppError(error instanceof Error ? error.message : 'Error al eliminar despacho', 500),
             500 as any
         );
     }

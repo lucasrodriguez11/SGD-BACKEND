@@ -50,6 +50,7 @@ export interface IMovimiento {
   estado: EstadoExpediente;
   observaciones?: string;
   usuarioResponsable?: string;
+  usuarioResponsableNombre?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }

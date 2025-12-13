@@ -50,11 +50,11 @@ export class MovimientoService {
         throw new Error('El despacho destino no puede ser igual al despacho actual del expediente');
       }
 
-      // Create movement record
+      // Create movement record (normalizar nombres de despacho con trim para consistencia)
       const movimiento = new MovimientoModel({
         expedienteId: data.expedienteId,
-        despachoAnterior: expediente.despachoActual,
-        despachoNuevo: data.despachoNuevo,
+        despachoAnterior: expediente.despachoActual.trim(),
+        despachoNuevo: data.despachoNuevo.trim(),
         fojasAgregadas: data.fojasAgregadas || 0,
         estado: data.estado,
         observaciones: data.observaciones,
@@ -63,10 +63,10 @@ export class MovimientoService {
 
       await movimiento.save({ session });
 
-      // Update expediente
-      expediente.despachoActual = data.despachoNuevo;
+      // Update expediente - NO cambiar despachoActual hasta confirmar recepción
+      // Solo actualizar fojas y estado a ENVIADO
       expediente.fojas += data.fojasAgregadas || 0;
-      expediente.estado = data.estado;
+      expediente.estado = 'ENVIADO'; // Siempre ENVIADO cuando se crea un movimiento
 
       await expediente.save({ session });
 
@@ -83,12 +83,22 @@ export class MovimientoService {
         'Movement registered successfully'
       );
 
+      // Lookup despacho ID for websocket channel
+      let despachoDestinoId: string | undefined;
+      try {
+        const { DespachoModel } = await import('@/database/models/Despacho');
+        const desp = await DespachoModel.findOne({
+          nombre: { $regex: new RegExp(`^${data.despachoNuevo.trim()}$`, 'i') }
+        }).lean().exec();
+        if (desp) despachoDestinoId = desp._id.toString();
+      } catch { /* ignore lookup error */ }
+
       // Emit realtime notification
       void NotificationService.push({
         type: 'NUEVO_MOVIMIENTO',
         message: `Expediente ${expediente.numeroExpediente} enviado a ${data.despachoNuevo}`,
         expedienteId: expediente._id?.toString(),
-        orgTargetId: data.despachoNuevo,
+        orgTargetId: despachoDestinoId || data.despachoNuevo, // Use ID if found
         extra: { from: movimiento.despachoAnterior, to: movimiento.despachoNuevo },
       });
 
@@ -111,17 +121,42 @@ export class MovimientoService {
    */
   static async getHistorial(expedienteId: string): Promise<IMovimiento[]> {
     try {
-      const movimientos = await MovimientoModel.find({ expedienteId })
-        .sort({ fechaMovimiento: -1 })
+      // Ordenar por fecha ascendente (más antiguo primero) para mostrar el historial completo en orden cronológico
+      const movimientos = await MovimientoModel.find({
+        expedienteId,
+        estado: { $ne: 'RECHAZADO' } // Excluir movimientos rechazados del historial oficial
+      })
+        .sort({ fechaMovimiento: 1 }) // Cambiado a 1 (ascendente) para orden cronológico
         .lean()
         .exec();
+
+      // Populate usuarioResponsableNombre
+      const { UserModel } = await import('@/database/models/User');
+      const enriched = await Promise.all(
+        movimientos.map(async (mov: any) => {
+          let nombre = mov.usuarioResponsable; // Default to stored value (might be name)
+
+          // If it looks like an ObjectId, try to fetch the name
+          if (mov.usuarioResponsable && /^[0-9a-fA-F]{24}$/.test(mov.usuarioResponsable)) {
+            try {
+              const user = await UserModel.findById(mov.usuarioResponsable).lean().exec();
+              if (user) {
+                nombre = user.name;
+              }
+            } catch (e) {
+              // Ignore error, keep original value
+            }
+          }
+          return { ...mov, usuarioResponsableNombre: nombre };
+        })
+      );
 
       logger.info(
         { expedienteId, count: movimientos.length },
         'Movement history retrieved'
       );
 
-      return movimientos as IMovimiento[];
+      return enriched as IMovimiento[];
     } catch (error) {
       logger.error({ error, expedienteId }, 'Error getting movement history');
       throw new Error('Error al obtener el historial de movimientos');
@@ -138,7 +173,22 @@ export class MovimientoService {
         .lean()
         .exec();
 
-      return movimiento as IMovimiento | null;
+      if (!movimiento) return null;
+
+      let nombre = movimiento.usuarioResponsable; // Default to stored value
+      if (movimiento.usuarioResponsable && /^[0-9a-fA-F]{24}$/.test(movimiento.usuarioResponsable)) {
+        try {
+          const { UserModel } = await import('@/database/models/User');
+          const user = await UserModel.findById(movimiento.usuarioResponsable).lean().exec();
+          if (user) {
+            nombre = user.name;
+          }
+        } catch (e) {
+          // Ignore error
+        }
+      }
+
+      return { ...movimiento, usuarioResponsableNombre: nombre } as IMovimiento;
     } catch (error) {
       logger.error({ error, expedienteId }, 'Error getting latest movement');
       throw new Error('Error al obtener el último movimiento');
@@ -159,9 +209,24 @@ export class MovimientoService {
         .sort({ fechaMovimiento: -1 })
         .limit(limit)
         .lean()
+        .lean()
         .exec();
 
-      return movimientos as IMovimiento[];
+      // Enriquecer con numeroExpediente
+      const enriched = await Promise.all(
+        movimientos.map(async (mov: any) => {
+          const expediente = await ExpedienteModel.findById(mov.expedienteId).lean().exec();
+          return {
+            ...mov,
+            expedienteId: {
+              _id: mov.expedienteId,
+              numeroExpediente: expediente?.numeroExpediente ?? mov.expedienteId,
+            },
+          };
+        })
+      );
+
+      return enriched as IMovimiento[];
     } catch (error) {
       logger.error({ error, despacho }, 'Error getting movements by despacho');
       throw new Error('Error al obtener movimientos por despacho');
@@ -219,11 +284,12 @@ export class MovimientoService {
     try {
       // First get despacho nombre from ID
       const { DespachoModel } = await import('@/database/models/Despacho');
+      const { ExpedienteModel } = await import('@/database/models/Expediente');
       const despacho = await DespachoModel.findById(despachoId).lean().exec();
       if (!despacho) throw new Error('Despacho no encontrado');
 
       const movimientos = await MovimientoModel.find({
-        despachoAnterior: despacho.nombre,
+        despachoAnterior: despacho.nombre.trim(),
         estado: 'ENVIADO',
       })
         .sort({ fechaMovimiento: -1 })
@@ -231,8 +297,22 @@ export class MovimientoService {
         .lean()
         .exec();
 
-      logger.info({ despachoId, despachoNombre: despacho.nombre, count: movimientos.length }, 'Enviados by despacho retrieved');
-      return movimientos as IMovimiento[];
+      // Enriquecer con numeroExpediente
+      const enriched = await Promise.all(
+        movimientos.map(async (mov: any) => {
+          const expediente = await ExpedienteModel.findById(mov.expedienteId).lean().exec();
+          return {
+            ...mov,
+            expedienteId: {
+              _id: mov.expedienteId,
+              numeroExpediente: expediente?.numeroExpediente ?? mov.expedienteId,
+            },
+          };
+        })
+      );
+
+      logger.info({ despachoId, despachoNombre: despacho.nombre, count: enriched.length }, 'Enviados by despacho retrieved');
+      return enriched as IMovimiento[];
     } catch (error) {
       logger.error({ error, despachoId }, 'Error getting enviados by despacho');
       throw new Error('Error al obtener movimientos enviados');
@@ -246,11 +326,12 @@ export class MovimientoService {
     try {
       // First get despacho nombre from ID
       const { DespachoModel } = await import('@/database/models/Despacho');
+      const { ExpedienteModel } = await import('@/database/models/Expediente');
       const despacho = await DespachoModel.findById(despachoId).lean().exec();
       if (!despacho) throw new Error('Despacho no encontrado');
 
       const movimientos = await MovimientoModel.find({
-        despachoNuevo: despacho.nombre,
+        despachoNuevo: despacho.nombre.trim(),
         estado: 'RECEPCIONADO',
       })
         .sort({ fechaMovimiento: -1 })
@@ -258,8 +339,22 @@ export class MovimientoService {
         .lean()
         .exec();
 
-      logger.info({ despachoId, despachoNombre: despacho.nombre, count: movimientos.length }, 'Recepcionados by despacho retrieved');
-      return movimientos as IMovimiento[];
+      // Enriquecer con numeroExpediente
+      const enriched = await Promise.all(
+        movimientos.map(async (mov: any) => {
+          const expediente = await ExpedienteModel.findById(mov.expedienteId).lean().exec();
+          return {
+            ...mov,
+            expedienteId: {
+              _id: mov.expedienteId,
+              numeroExpediente: expediente?.numeroExpediente ?? mov.expedienteId,
+            },
+          };
+        })
+      );
+
+      logger.info({ despachoId, despachoNombre: despacho.nombre, count: enriched.length }, 'Recepcionados by despacho retrieved');
+      return enriched as IMovimiento[];
     } catch (error) {
       logger.error({ error, despachoId }, 'Error getting recepcionados by despacho');
       throw new Error('Error al obtener movimientos recepcionados');

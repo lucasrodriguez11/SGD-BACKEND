@@ -28,12 +28,22 @@ export class ExpedienteService {
 
       const created = expediente.toObject();
 
+      // Lookup despacho ID for websocket channel
+      let despachoId: string | undefined;
+      try {
+        const { DespachoModel } = await import('@/database/models/Despacho');
+        const desp = await DespachoModel.findOne({
+          nombre: { $regex: new RegExp(`^${created.despachoActual.trim()}$`, 'i') }
+        }).lean().exec();
+        if (desp) despachoId = desp._id.toString();
+      } catch { /* ignore lookup error */ }
+
       // Emit Notification + WS event for registro
       await NotificationService.push({
         type: 'EXPEDIENTE_REGISTRADO',
         message: `Expediente ${created.numeroExpediente} registrado en ${created.despachoActual}`,
         expedienteId: created._id as any,
-        orgTargetId: created.despachoActual,
+        orgTargetId: despachoId || created.despachoActual, // Use ID if found
       }).catch(() => { });
 
       wsHub.broadcast('notifications', {
@@ -211,6 +221,42 @@ export class ExpedienteService {
     } catch (error) {
       logger.error({ error, id }, 'Error archiving expediente');
       throw new Error('Error al archivar el expediente');
+    }
+  }
+
+  /**
+   * Delete expediente permanently (hard delete)
+   * Also deletes related movimientos and recepciones
+   */
+  static async delete(id: string): Promise<boolean> {
+    try {
+      logger.info({ id }, 'Deleting expediente permanently');
+
+      // Check if expediente exists
+      const expediente = await ExpedienteModel.findById(id).lean().exec();
+      if (!expediente) {
+        logger.warn({ id }, 'Expediente not found for deletion');
+        return false;
+      }
+
+      // Delete related movimientos
+      const { MovimientoModel } = await import('@/database/models/Movimiento');
+      await MovimientoModel.deleteMany({ expedienteId: id }).exec();
+      logger.info({ id }, 'Related movimientos deleted');
+
+      // Delete related recepciones
+      const { RecepcionModel } = await import('./RecepcionService');
+      await RecepcionModel.deleteMany({ expedienteId: id }).exec();
+      logger.info({ id }, 'Related recepciones deleted');
+
+      // Delete the expediente
+      await ExpedienteModel.findByIdAndDelete(id).exec();
+      logger.info({ id }, 'Expediente deleted permanently');
+
+      return true;
+    } catch (error) {
+      logger.error({ error, id }, 'Error deleting expediente');
+      throw new Error('Error al eliminar el expediente');
     }
   }
 

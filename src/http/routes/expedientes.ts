@@ -13,7 +13,7 @@ import {
   mongoIdSchema,
 } from '../validators';
 import { createAppError } from '../middleware';
-import { requireAuth } from '@/http/middleware/auth';
+import { requireAuth, requireRole } from '@/http/middleware/auth';
 
 const expedientes = new Hono();
 
@@ -174,7 +174,7 @@ expedientes.put(
 );
 
 /**
- * DELETE /expedientes/:id - Archive expediente
+ * DELETE /expedientes/:id - Archive expediente (soft delete)
  */
 expedientes.delete('/:id', requireAuth, zValidator('param', mongoIdSchema), async (c) => {
   try {
@@ -189,6 +189,33 @@ expedientes.delete('/:id', requireAuth, zValidator('param', mongoIdSchema), asyn
     const response: ApiResponse = {
       success: true,
       data: { expediente },
+    };
+
+    return c.json(response, 200);
+  } catch (error: any) {
+    if (error.statusCode === 404) {
+      throw error;
+    }
+    throw createAppError(error.message, 500, 'EXPEDIENTE_DELETE_ERROR');
+  }
+});
+
+/**
+ * DELETE /expedientes/:id/delete - Delete expediente permanently (hard delete)
+ */
+expedientes.delete('/:id/delete', requireAuth, requireRole('ADMIN'), zValidator('param', mongoIdSchema), async (c) => {
+  try {
+    const { id } = c.req.valid('param');
+
+    const deleted = await ExpedienteService.delete(id);
+
+    if (!deleted) {
+      throw createAppError('Expediente no encontrado', 404, 'EXPEDIENTE_NOT_FOUND');
+    }
+
+    const response: ApiResponse = {
+      success: true,
+      data: { message: 'Expediente eliminado permanentemente' },
     };
 
     return c.json(response, 200);

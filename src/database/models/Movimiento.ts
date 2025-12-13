@@ -39,7 +39,7 @@ const movimientoSchema = new Schema<IMovimiento>(
             type: String,
             required: [true, 'Estado es requerido'],
             enum: {
-                values: ['RECEPCIONADO', 'ENVIADO', 'ARCHIVADO'],
+                values: ['RECEPCIONADO', 'ENVIADO', 'ARCHIVADO', 'RECHAZADO'],
                 message: '{VALUE} no es un estado válido',
             },
         },

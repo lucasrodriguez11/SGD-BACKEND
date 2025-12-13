@@ -4,6 +4,7 @@
 
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
+import { z } from 'zod';
 import { MovimientoService } from '@/services';
 import type { ApiResponse } from '@/types';
 import { createMovimientoSchema, mongoIdSchema } from '../validators';
@@ -40,7 +41,7 @@ movimientos.post('/', requireAuth, zValidator('json', createMovimientoSchema), a
  */
 movimientos.get(
   '/expediente/:expedienteId/historial',
-  zValidator('param', mongoIdSchema.extend({ expedienteId: mongoIdSchema.shape.id })),
+  zValidator('param', z.object({ expedienteId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'ID inválido') })),
   async (c) => {
     try {
       const { expedienteId } = c.req.valid('param');

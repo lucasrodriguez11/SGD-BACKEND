@@ -36,12 +36,23 @@ export class ArchivoService {
                 expedientesVencidos.map(async (expediente) => {
                     expediente.estado = 'ARCHIVADO';
                     await expediente.save();
+
+                    // Lookup despacho ID for websocket channel
+                    let despachoId: string | undefined;
+                    try {
+                        const { DespachoModel } = await import('@/database/models/Despacho');
+                        const desp = await DespachoModel.findOne({
+                            nombre: { $regex: new RegExp(`^${expediente.despachoActual.trim()}$`, 'i') }
+                        }).lean().exec();
+                        if (desp) despachoId = desp._id.toString();
+                    } catch { /* ignore lookup error */ }
+
                     // push notification per expediente
                     void NotificationService.push({
                         type: 'EXPEDIENTE_ARCHIVADO',
                         message: `Expediente ${expediente.numeroExpediente} fue archivado automáticamente`,
                         expedienteId: expediente._id?.toString(),
-                        orgTargetId: expediente.despachoActual,
+                        orgTargetId: despachoId || expediente.despachoActual, // Use ID if found
                     });
                     return expediente;
                 })

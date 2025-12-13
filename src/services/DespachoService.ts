@@ -146,7 +146,7 @@ export class DespachoService {
     }
 
     /**
-     * Delete despacho (set to INACTIVO)
+     * Delete despacho (set to INACTIVO - soft delete)
      */
     static async delete(id: string): Promise<IDespacho | null> {
         logger.info({ id }, 'Deactivating despacho');
@@ -168,6 +168,26 @@ export class DespachoService {
     }
 
     /**
+     * Delete despacho permanently (hard delete)
+     */
+    static async deletePermanently(id: string): Promise<boolean> {
+        logger.info({ id }, 'Deleting despacho permanently');
+
+        // Check if despacho exists
+        const despacho = await DespachoModel.findById(id).lean().exec();
+        if (!despacho) {
+            logger.warn({ id }, 'Despacho not found for deletion');
+            return false;
+        }
+
+        // Delete the despacho
+        await DespachoModel.findByIdAndDelete(id).exec();
+        logger.info({ id }, 'Despacho deleted permanently');
+
+        return true;
+    }
+
+    /**
      * Get all active despachos (for dropdowns)
      */
     static async getActivos(): Promise<IDespacho[]> {
@@ -180,6 +200,7 @@ export class DespachoService {
         return despachos;
     }
 }
+
 
 
 
